@@ -1,2 +1,6 @@
 venv/
+ngram2vec/
+word_vec/
+bert_zh/
 .DS_Store
+*.csv

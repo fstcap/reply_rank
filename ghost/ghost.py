@@ -13,21 +13,11 @@ from PySide2.QtCore import (
     QSize
 )
 
-class GhostWebPage(QWebEnginePage):
-    """Overrides QtWebKit.QWebPage in order to intercept some graphical
-    behaviours like alert(), confirm().
-    Also intercepts client side console.log().
-    """
-    def __init__(self, app, session):
-        self.session = session
-        super(GhostWebPage, self).__init__()
-
 class Ghost(object):
     """`Ghost` manages a Qt application.
     """
     _app = None
     def __init__(self):
-        print("\033[0;36mInitializing QT application\033[0m")
         Ghost._app = QApplication.instance() or QApplication(['ghost'])
     def start(self, **kwargs):
         """Starts a new `Session`.
@@ -44,13 +34,13 @@ class Session(object):
     """`Session` manages a QWebPage.
     """
     _app = None
-    def __init__(self, ghost, viewport_size=(1600, 900), web_page_class=GhostWebPage):
+    def __init__(self, ghost, viewport_size=(1600, 900)):
         self.ghost = ghost
 
         self.html = None
         self.loaded = True
         
-        self.page = web_page_class(self.ghost._app, self)
+        self.page = QWebEnginePage()
         
         self.page.settings().setAttribute(
             QWebEngineSettings.LocalStorageEnabled, True)
@@ -64,7 +54,7 @@ class Session(object):
         # Page signals
         self.page.loadFinished.connect(self._page_loaded)
         self.page.loadStarted.connect(self._page_load_started)
-        self.page.loadProgress.connect(self._page_load_progress)
+        # self.page.loadProgress.connect(self._page_load_progress)
 
         class GhostQWebView(QWebEngineView):
             def sizeHint(self):
@@ -72,7 +62,7 @@ class Session(object):
 
         self.webview = GhostQWebView()
         self.set_viewport_size(*viewport_size)
-
+         
         self.webview.setPage(self.page)
     def set_viewport_size(self, width, height):
         new_size = QSize(width, height)
@@ -82,7 +72,7 @@ class Session(object):
     def open(self, address):
         """Opens a web page.
         """
-        self.webview.load(QUrl(address)) 
+        self.page.load(QUrl(address)) 
         self._wait()
     def scroll_to_id(self, id):
         self.page.runJavaScript("""
@@ -94,19 +84,33 @@ class Session(object):
     def click(self, selector, btn=0):
         self.page.runJavaScript("""
             (function(){
-                var element = document.querySelectorAll(%s);
+                var elements = document.querySelectorAll(%s);
                 var event = new MouseEvent('click', {
                     'view': window,
                     'bubbles': true,
                     'cancelable': true
                 });
-                return element[%s].dispatchEvent(event);
+                var element = Array.from(elements).find(el => el.textContent == %s);
+                element.dispatchEvent(event);
             })();
         """ % (repr(selector), str(btn)))
-    def wait_for_page_loaded(self, selector):
+    def edit_html(self, selector, new_html):
+        self.page.runJavaScript("""
+            (function(){
+                var element = document.querySelector(%s);
+                element.innerHTML='%s'
+            })();
+        """ % (repr(selector), new_html))
+    def wait_for_page_loaded(self, selector, callback=None):
         self.loaded = False
         while not self.loaded:
-            if self.exists(selector):
+            if callback is not None:
+                self.to_html()
+                is_exist = callback(self.html)
+            else:
+                is_exist = self.exists(selector)
+            
+            if  is_exist:
                 self.loaded = True
             else:
                 self.loaded = False
@@ -142,12 +146,12 @@ class Session(object):
     def _page_load_started(self):
         """Called back when page load started.
         """
-        print("\033[0;32m_page_load_started\033[0m")
+        # print("\033[0;32m_page_load_started\033[0m")
         self.loaded = False
     def _page_loaded(self):
         """Called back when page is loaded.
         """
-        print("\033[0;32m_page_loaded\033[0m")
+        # print("\033[0;32m_page_loaded\033[0m")
         self.loaded = True
     def _page_load_progress(self, progress):
         print("\033[0;32m_page_loaded_progress:\033[0m", progress)
