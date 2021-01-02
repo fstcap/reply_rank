@@ -17,8 +17,6 @@ def bert_model():
     encoder = hub.KerasLayer(model_path, trainable=False)
     encoder_inputs = preprocessor(text_input)
     outputs = encoder(encoder_inputs)['pooled_output']
-    initializer = tf.keras.initializers.Constant(0.5)
-    outputs = tf.keras.layers.Dense(300, kernel_initializer = initializer)(outputs)
     return tf.keras.Model(inputs=text_input, outputs=outputs)
 
 class SentenceRank(object):
