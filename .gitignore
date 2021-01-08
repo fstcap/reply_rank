@@ -4,3 +4,5 @@ word_vec/
 bert_zh/
 .DS_Store
 *.csv
+*.png
+*.pyc

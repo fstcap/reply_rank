@@ -54,7 +54,7 @@ class SentenceRank(object):
     def _split_str(self, sentences):
         sens_flat = []
         for sentence in sentences:
-            sens_list = re.split(r"(。|\.|！｜\!|;|；|,|，)", str(sentence))
+            sens_list = re.split(r"(。|\.|！|\!|;|；|,|，)", str(sentence))
             sens_flat.extend(sens_list)
         return sens_flat
     def exit(self):
