@@ -6,6 +6,7 @@ import pandas as pd
 import tensorflow as tf
 import tensorflow_hub as hub
 import tensorflow_text
+import jieba
 
 root_path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -29,20 +30,33 @@ class SentenceRank(object):
         del data_frame
         self.sentences = self._split_str(self.sentences)
         self.sentences = map(self._preprocess, self.sentences)
-        self.sentences = list(filter(lambda s: s != '', self.sentences))
-        
-        self.b_model = bert_model() 
-        self.sens_vec = self.run(self.sentences)
+        self.sentences = list(filter(lambda s: s != '' and len(s)>1, self.sentences))
+        self.sens_ws = self.split_word(self.sentences)
+
+        self.b_model = bert_model()
+        self.sens_vec = self.run(self.words)
         print(self.sens_vec)
     def run(self,sentences):
         dataset = tf.data.Dataset.from_tensor_slices(sentences).batch(64)
         predicts = []
+        count = 0
         for x in dataset:
+            count +=1
+            print(f"\033[0;35mEach:{count}\033[0m")
             predicts.append(self.predict(x).numpy())
         return predicts
     @tf.function
     def predict(self, x):
         return self.b_model(x)
+    def split_word(self, sentences):
+        self.words = []
+        sens_list = []
+        for sentence in sentences:
+            words = jieba.cut(sentence)
+            words = list(words)
+            self.words.extend(words)
+            sens_list.append(words)
+        return sens_list
     def _unicode_to_ascii(self, sentence):
         return ''.join(
             c for c in unicodedata.normalize('NFD', sentence) if unicodedata.category(c) != 'Mn')
