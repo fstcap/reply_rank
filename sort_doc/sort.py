@@ -11,6 +11,8 @@ from collections import Counter
 
 # import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans, MeanShift, estimate_bandwidth
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 
 class Sort(object):
@@ -40,7 +42,7 @@ class Sort(object):
     def word_kmeans(self):
         words = list(self.word_vec.keys())
         vecs = np.array(list(self.word_vec.values()), dtype=np.float64)
-        y_pred = self.k_means(vecs)
+        y_pred, cluster_flags = self.k_means(vecs)
         
 #        num = 40
 #        p_words = words[:num]
@@ -56,22 +58,71 @@ class Sort(object):
 #            verticalalignment='center', horizontalalignment='right',rotation=0)
 #        fig.savefig('word_k_vecs.png')
 
-        return words, y_pred
+        return words, y_pred, cluster_flags
     def sen_kmeans(self):
         vecs = self.sens_vec
-        y_pred = self.k_means(vecs)
-        return self.sentences, self.sens_index, y_pred
+        y_pred, cluster_flags = self.k_means(vecs)
+        return self.sentences, self.sens_index, y_pred, cluster_flags
     def k_means(self, vecs, n_clusters=None):
+#        X_scaled = StandardScaler().fit_transform(vecs)
+        X_unoise = IsolationForest(random_state=0).fit_predict(vecs)
+
+        positive_index = []
+        positive = []
+        negative = []
+        
+        for index, value in enumerate(X_unoise):
+            if value == 1:
+                positive_index.append(index)
+                positive.append(vecs[index])
+            else:
+                negative.append((index,value))
+        print(f"\033[0;35m噪音个数: \033[0;36m{len(negative)}\033[0m")
         if n_clusters is None:
-            bandwidth = estimate_bandwidth(vecs, quantile=0.2)
+            bandwidth = estimate_bandwidth(positive, quantile=0.2)
 
             ms = MeanShift(bandwidth=bandwidth)
-            ms.fit(vecs)
+            ms.fit(positive)
             labels = ms.labels_
             labels_unique = np.unique(labels)
             n_clusters = len(labels_unique)
             print(f"\033[0;35mnumber of estimated clusters : \033[0;36m{n_clusters}\033[0m")
-        return KMeans(n_clusters=n_clusters).fit_predict(vecs)
+        kms = KMeans(n_clusters=n_clusters)
+        y_positive_pred = kms.fit_predict(positive)
+        positive = list(zip(positive_index, y_positive_pred))
+        positive.extend(negative)
+        y_pred = np.array(sorted(positive, key=lambda x:x[0], reverse=False))[:,-1]
+        cluster_centers = kms.cluster_centers_
+        print(f"\033[0;35mkmean中心个数 : \033[0;36m{len(cluster_centers)}\033[0m")    
+        tf_vecs = tf.Variable(vecs)
+        tf_ccs = tf.Variable(cluster_centers)
+        cluster_flags = self.get_cci(tf_vecs, tf_ccs).numpy()
+        print(f"\033[0;35mcluster_flags中心个数 : \033[0;36m{np.sum(cluster_flags)}\033[0m")    
+        return y_pred, cluster_flags
+    def get_cci(self, vecs, cluster_centers):
+        tf_vecs = tf.Variable(vecs)
+        tf_ccs = tf.Variable(cluster_centers)
+        
+        vecs = tf.expand_dims(tf_vecs, axis=1)
+        tf_ccs = tf.expand_dims(tf_ccs, axis=1)
+        
+        tf_vecs = tf.data.Dataset.from_tensor_slices(vecs).batch(64)
+        dis_matrix = []
+        for batch_vecs in tf_vecs:
+            matrix = self.create_sim_matrix(batch_vecs, tf_ccs)
+            if len(dis_matrix) == 0:
+                dis_matrix = matrix
+                continue
+            dis_matrix = tf.concat([dis_matrix, matrix], axis=0)
+        print(f"\033[0;35mDis matrix形状: \033[0;36m{dis_matrix.shape}\033[0m")    
+        dis_mins = tf.math.reduce_min(dis_matrix, axis=0)
+        print(f"\033[0;35mDis mins形状: \033[0;36m{dis_mins.shape}\033[0m")    
+        indices = []
+        for index, dis_min in enumerate(dis_mins):
+            indice = tf.where(tf.equal(dis_matrix[:,index], dis_min))[0][0]
+            indices.append(indice)
+        print(f"\033[0;35mindices 长度: \033[0;36m{len(indices)}\033[0m")    
+        return tf.math.reduce_sum(tf.one_hot(indices, depth=vecs.shape[0]), axis=0)
     def word_rank(self, batch_size=64, iter_num=10, d=0.85):
         words = list(self.word_vec.keys())
         vecs = np.array(list(self.word_vec.values()), dtype=np.float64)
@@ -92,7 +143,9 @@ class Sort(object):
         for vecs_raw in vecs:
             matrix_raw = []
             for vecs_col in vecs:
-                sims = self.create_sim_matrix(vecs_raw, vecs_col)
+                matrix = self.create_sim_matrix(vecs_raw, vecs_col)
+                reduce_max = tf.math.reduce_max(matrix)
+                sims = reduce_max - matrix
                 if len(matrix_raw) == 0:
                     matrix_raw = sims
                     continue
@@ -123,8 +176,7 @@ class Sort(object):
         matrix = tf.math.square(matrix)
         matrix = tf.math.reduce_sum(matrix, axis=-1)
         matrix = tf.math.sqrt(matrix)
-        reduce_max = tf.math.reduce_max(matrix)
-        return reduce_max - matrix
+        return matrix
     def sens2vec(self, sentences, word_vec):
         """文本转vocab索引
         Args:
@@ -246,14 +298,14 @@ if __name__ == '__main__':
     sentences = data_frame['text'].values
      
     with Sort(sentences, word2vec_path, output_word_vec) as sort:
-        sens, sens_index, ranks = sort.sen_rank()
-        sen_ranks = list(zip(sens, ranks, sens_index))
-        sen_ranks = sorted(sen_ranks, key=lambda x: x[1], reverse=True)
-        for index in range(20):
-            print(f"\033[0;36m{sen_ranks[index][0]}\033[0;35m{sentences[sen_ranks[index][2]]}\033[0m\n")
-#        _, sorts, _ = sort.sen_kmeans()
-#        sen_sort = list(zip(sentences, sorts, sens_index))
+#        sens, sens_index, ranks = sort.sen_rank()
+#        sen_ranks = list(zip(sens, ranks, sens_index))
+#        sen_ranks = sorted(sen_ranks, key=lambda x: x[1], reverse=True)
 #        for index in range(20):
-#            print(f"\033[0;36m{sen_sort[index][0]}\033[0;35m{sentences[sen_sort[index][2]]}\033[0m\n")
+#            print(f"\033[0;36m{sen_ranks[index][0]}\033[0;35m{sentences[sen_ranks[index][2]]}\033[0m\n")
+        sens, sens_index, sorts, cluster_flags = sort.sen_kmeans()
+        sen_sort = list(zip(sens, sorts, sens_index))
+        for index in range(20):
+            print(f"\033[0;36m{sen_sort[index][0]}\033[0;35m{sentences[sen_sort[index][2]]}\033[0m\n")
     end_time = time.time()
     print("\033[0;34mtotal time:\033[0m", end_time - start_time)
